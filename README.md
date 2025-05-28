@@ -1,0 +1,2 @@
+# pj_marketdate_analytics2025
+日本の主要市場データの集計をするためのコードです
