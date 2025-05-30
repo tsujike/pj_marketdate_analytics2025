@@ -47,52 +47,70 @@ def preprocess_market_data(df_initial):
         df.drop(columns=['市場名_temp'], inplace=True)
         print("最終的な市場名_正規化 ユニーク値と件数:\n", df['市場名_正規化'].value_counts(dropna=False))
 
-    print("\n\n" + "="*20 + " ステップ5: 数量単位の正規化 " + "="*20)
-    # --- デバッグ用出力（必要に応じてコメント解除） ---
-    # if '市場名_正規化' in df.columns:
-    #     df_tokyo_chuo_debug = df[df['市場名_正規化'] == '東京中央']
-    #     if not df_tokyo_chuo_debug.empty:
-    #         if '数量単位（kg、箱、尾など）' in df_tokyo_chuo_debug.columns:
-    #             print("\n--- (デバッグ) 東京中央市場の「数量単位（kg、箱、尾など）」上位10件 ---")
-    #             print(df_tokyo_chuo_debug['数量単位（kg、箱、尾など）'].value_counts(dropna=False).nlargest(10))
-    #         if '数量単位（トン、箱、尾など）' in df_tokyo_chuo_debug.columns:
-    #             print("\n--- (デバッグ) 東京中央市場の「数量単位（トン、箱、尾など）」上位10件 ---")
-    #             print(df_tokyo_chuo_debug['数量単位（トン、箱、尾など）'].value_counts(dropna=False).nlargest(10))
-
+    print("\n\n" + "="*20 + " ステップ5: 数量単位の正規化 (元データ修正前提) " + "="*20)
+    
     df['数量単位_正規化'] = pd.Series(dtype='object') 
+    # 元データで数量が既にkg換算済み、またはトン表記でも数値がkg相当であると仮定するため、
+    # 卸売数量をそのまま卸売数量_kg換算の初期値とする。
     df['卸売数量_kg換算'] = df['卸売数量'].copy() 
+    
     primary_unit_col = '数量単位（kg、箱、尾など）'
-    secondary_unit_col = '数量単位（トン、箱、尾など）'
-    if primary_unit_col in df.columns: df[primary_unit_col] = df[primary_unit_col].astype(str).str.lower()
-    if secondary_unit_col in df.columns: df[secondary_unit_col] = df[secondary_unit_col].astype(str).str.lower()
-    
+    secondary_unit_col = '数量単位（トン、箱、尾など）' # この列は参照するが、1000倍換算はしない
+
+    # 元の単位列を小文字化・文字列化
     if primary_unit_col in df.columns:
-        kg_synonyms_primary = ['kg', 'キロ', 'キログラム', 'ｋｇ', 'キログラム(kg)', 'ｋｇ(キログラム)']
-        df.loc[df[primary_unit_col].isin(kg_synonyms_primary), '数量単位_正規化'] = 'kg'
-        other_units_primary = ['箱', '尾', '束', '枚', 'ケース', '袋', 'パック', 'ｹｰｽ', 'p', 'CS', 'cs', 'はい', '連', 'ｶｰﾄﾝ', 'ｾｯﾄ', 'ネット', 'NETTO', 'kg以外', 'ｶｺﾞ']
-        for unit_val in other_units_primary: df.loc[df[primary_unit_col] == unit_val, '数量単位_正規化'] = unit_val
-    
+        df[primary_unit_col] = df[primary_unit_col].astype(str).str.lower()
     if secondary_unit_col in df.columns:
-        kg_synonyms_secondary = ['kg', 'キロ', 'キログラム', 'ｋｇ', '1kg', '1ｋｇ', '1キログラム', '1ｋｇ(キログラム)', '1ｋｇ']
-        condition_kg_secondary = df[secondary_unit_col].isin(kg_synonyms_secondary) & df['数量単位_正規化'].isnull()
+        df[secondary_unit_col] = df[secondary_unit_col].astype(str).str.lower()
+
+    # kg単位の同義語
+    kg_synonyms = ['kg', 'キロ', 'キログラム', 'ｋｇ', 'キログラム(kg)', 'ｋｇ(キログラム)', '1kg', '1ｋｇ', '1キログラム', '1ｋｇ(キログラム)']
+    
+    # その他の一般的な単位
+    other_units = ['箱', '尾', '束', '枚', 'ケース', '袋', 'パック', 'ｹｰｽ', 'p', 'CS', 'cs', 'はい', '連', 'ｶｰﾄﾝ', 'ｾｯﾄ', 'ネット', 'NETTO', 'kg以外', 'ｶｺﾞ']
+    
+    # 優先順位1: primary_unit_col
+    if primary_unit_col in df.columns:
+        df.loc[df[primary_unit_col].isin(kg_synonyms), '数量単位_正規化'] = 'kg'
+        for unit_val in other_units:
+            df.loc[df[primary_unit_col] == unit_val, '数量単位_正規化'] = unit_val
+            
+    # 優先順位2: secondary_unit_col (数量単位_正規化がまだNaNの場合)
+    if secondary_unit_col in df.columns:
+        condition_kg_secondary = df[secondary_unit_col].isin(kg_synonyms) & df['数量単位_正規化'].isnull()
         df.loc[condition_kg_secondary, '数量単位_正規化'] = 'kg'
+        
+        # ★★★「トン」の扱い変更★★★
+        # 元データで既に数量が調整済みと仮定するため、1000倍換算は行わない。
+        # 「トン」と記録されていても、それが実質kgを示しているか、
+        # あるいは元データ修正で「トン」という単位自体が適切なkg値と共に残っているかを想定。
+        # もし「トン」という単位が残っていて、かつ卸売数量がトン数を示している場合は、
+        # 手動修正で卸売数量をkg相当に直したという前提。
         ton_synonyms = ['トン', 'ｔ', 't']
-        condition_ton_secondary = df[secondary_unit_col].isin(ton_synonyms) & df['数量単位_正規化'].isnull()
-        df.loc[condition_ton_secondary, '数量単位_正規化'] = 'kg'
-        df.loc[condition_ton_secondary, '卸売数量_kg換算'] = df.loc[condition_ton_secondary, '卸売数量'] * 1000
-        other_units_secondary = ['箱', '尾', '束', '枚', 'ケース', '袋', 'パック', 'ｹｰｽ', 'p', 'CS', 'cs', 'はい', '連', 'ｶｰﾄﾝ', 'ｾｯﾄ', 'ネット', 'NETTO', 'kg以外', 'ｶｺﾞ']
-        for unit_val in other_units_secondary:
+        condition_is_ton_secondary = df[secondary_unit_col].isin(ton_synonyms) & df['数量単位_正規化'].isnull()
+        df.loc[condition_is_ton_secondary, '数量単位_正規化'] = 'kg' # 単位はkgとして扱う
+        # df.loc[condition_is_ton_secondary, '卸売数量_kg換算'] = df.loc[condition_is_ton_secondary, '卸売数量'] * 1000 # ← この行を削除またはコメントアウト
+        
+        for unit_val in other_units: # other_units は kg_synonyms を含まないように注意
             condition_other_secondary = (df[secondary_unit_col] == unit_val) & df['数量単位_正規化'].isnull()
             df.loc[condition_other_secondary, '数量単位_正規化'] = unit_val
             
+    # デフォルト単位の想定 (両方の単位列が空欄の場合)
     condition_default_kg = df['数量単位_正規化'].isnull()
     if primary_unit_col in df.columns: condition_default_kg &= (df[primary_unit_col].isin(['nan', 'NaN', '']) )
     if secondary_unit_col in df.columns: condition_default_kg &= (df[secondary_unit_col].isin(['nan', 'NaN', '']) )
     if '卸売数量' in df.columns: condition_default_kg &= df['卸売数量'].notna() & (df['卸売数量'] > 0)
     df.loc[condition_default_kg, '数量単位_正規化'] = 'kg'
+    
+    # 最終調整: 数量単位_正規化が 'kg' でない場合、卸売数量_kg換算は NaN
+    # (元データが既にkg換算済みという前提なので、この処理も再検討の余地あり。
+    #  もし単位が'箱'などで卸売数量が個数なら、kg換算はできないのでNaNで正しい。)
     df.loc[df['数量単位_正規化'] != 'kg', '卸売数量_kg換算'] = np.nan
-    print("「数量単位_正規化」ユニーク値と件数 (修正後):\n", df['数量単位_正規化'].value_counts(dropna=False))
+    
+    print("「数量単位_正規化」ユニーク値と件数 (元データ修正後):\n", df['数量単位_正規化'].value_counts(dropna=False))
+    print("\n「卸売数量_kg換算」の欠損数 (元データ修正後):\n", df['卸売数量_kg換算'].isnull().sum())
 
+    
     print("\n\n" + "="*20 + " ステップ6: 価格単位の正規化と価格調整 " + "="*20)
     
     # --- (デバッグ用: 大阪市場の実際の「価格単位」を確認 はそのまま) ---
